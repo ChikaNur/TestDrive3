@@ -1,0 +1,8 @@
+{
+  "name": "FAR",
+  "description": "Platform ujian lisan modern untuk mahasiswa IT.",
+  "requestFramePermissions": [
+    "microphone",
+    "camera"
+  ]
+}
