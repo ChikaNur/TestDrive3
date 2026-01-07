@@ -279,46 +279,93 @@ export const generateExamContent = async (
 };
 
 export const evaluateResponse = async (question: Question, answer: string): Promise<ExamResult> => {
-    // Simulated evaluation to return specific score range 60.0 - 69.9
-    // Simulate slight network delay
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
+    // 1. MANIPULASI SKOR (Diubah ke range 60-80) - Simulated
     let min = 60;
-    let max = 70;
+    let max = 80; 
 
-    // Apply Bias
+    // Apply Bias agar tidak terlalu seragam
     if (question.type === 'ORAL') {
-        // Bias toward higher end (65-69)
-        min = 65;
+        min = 65; // Lisan sedikit lebih tinggi (65-80)
+        max = 80;
     } else {
-        // Bias toward lower end (60-65) for CODING
-        max = 65;
+        min = 60;
+        max = 75; // Coding sedikit lebih rendah (60-75)
     }
 
-    // Generate random score
     let rawScore = min + (Math.random() * (max - min));
     
-    // Ensure we don't accidentally hit 70.0 if random is close to 1
-    if (rawScore >= 69.95) rawScore = 69.9;
+    // Safety clamp untuk memastikan tidak pernah tembus max atau di bawah min
+    rawScore = Math.max(min, Math.min(max, rawScore));
 
     // Round to 1 decimal
     const score = Math.round(rawScore * 10) / 10;
 
-    // Simple feedback based on score range
+    // 2. GENERATE FEEDBACK CERDAS DENGAN AI (With Circuit Breaker)
     let feedback = "";
-    if (score >= 68) {
-        feedback = "Jawaban cukup baik, logika dasar benar namun kurang detail teknis.";
-    } else if (score >= 65) {
-        feedback = "Konsep dasar dipahami, namun implementasi atau penjelasan perlu diperbaiki.";
-    } else {
-        feedback = "Jawaban kurang akurat. Perlu pendalaman materi dan logika pemrograman yang lebih kuat.";
+    
+    // Fungsi fallback statis (Anti-Fail)
+    const getFallbackFeedback = (s: number) => {
+        if (s >= 75) return "Jawaban sangat baik, logika dan implementasi teknis sudah sesuai dengan standar industri.";
+        if (s >= 68) return "Jawaban cukup relevan secara logika, namun implementasi teknis bisa lebih mendetail.";
+        if (s >= 65) return "Konsep dasar tertangkap, namun penjelasan belum sepenuhnya menjawab inti pertanyaan coding ini.";
+        return "Jawaban masih kurang tepat. Perlu pemahaman lebih dalam mengenai alur logika kode tersebut.";
+    };
+
+    try {
+        const prompt = `
+            Bertindaklah sebagai Dosen Penguji IT Senior.
+            Tugas: Berikan umpan balik (feedback) singkat untuk jawaban mahasiswa berikut.
+            
+            KONTEKS SOAL:
+            - Pertanyaan Dosen: "${question.aiPrompt}"
+            ${question.snippet ? `- Snippet Kode:\n${question.snippet.substring(0, 500)}...` : ''}
+
+            JAWABAN MAHASISWA:
+            "${answer}"
+
+            INSTRUKSI FEEDBACK:
+            - Bahasa: Indonesia Formal & Akademis.
+            - Analisa apakah jawaban mahasiswa relevan dengan konteks kodingan/pertanyaan.
+            - Jika jawaban terlihat ngawur/salah, koreksi dengan sopan.
+            - Jika jawaban terlihat benar, berikan apresiasi moderat dan tambahkan sedikit insight teknis.
+            - PENTING: JANGAN PERNAH MENYEBUTKAN NILAI ATAU SKOR DALAM TEKS FEEDBACK INI.
+            - Panjang: Maksimal 3 kalimat.
+        `;
+
+        // Create race condition: AI vs Timeout (8 seconds)
+        const feedbackPromise = ai.models.generateContent({
+            model: "gemini-3-flash-preview",
+            contents: { parts: [{ text: prompt }] },
+        });
+
+        const timeoutPromise = new Promise<any>((_, reject) => 
+            setTimeout(() => reject(new Error("Timeout")), 8000)
+        );
+
+        const response = await Promise.race([feedbackPromise, timeoutPromise]);
+        
+        feedback = response.text ? response.text.trim() : "";
+        
+        // DeepSeek suggestion: Validation to prevent empty/short feedback
+        if (!feedback || feedback.length < 10) {
+             throw new Error("Feedback too short or empty");
+        }
+
+    } catch (error) {
+        console.warn("Feedback generation skipped/failed (using fallback):", error);
+        // Error di sini tidak akan menghentikan aplikasi, hanya switch ke fallback
+    }
+
+    // Jika AI gagal, timeout, atau return kosong, gunakan fallback
+    if (!feedback) {
+        feedback = getFallbackFeedback(score);
     }
 
     return {
         questionId: question.id,
         type: question.type,
         studentAnswer: answer,
-        score: score,
+        score: score, // Nilai ini yang akan dikirim ke MockSheet
         feedback: feedback
     };
 };
